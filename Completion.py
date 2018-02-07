@@ -8,6 +8,7 @@ import os
 import sublime
 import sublime_plugin
 import subprocess
+import html
 from .lang_map import LANG_MAP
 
 
@@ -237,6 +238,7 @@ class YcmdCompletionEventListener(sublime_plugin.EventListener):
     ready_from_defer = False
     view_cache = dict()
     view_line = dict()
+    phantoms_cache = dict()
 
     def on_selection_modified_async(self, view):
         if view.id() == ERROR_PANEL.id():
@@ -268,6 +270,8 @@ class YcmdCompletionEventListener(sublime_plugin.EventListener):
             del self.view_line[view_id]
         if view_id in self.view_cache:
             del self.view_cache[view_id]
+        if view_id in self.phantoms_cache:
+            del self.phantoms_cache[view_id]
 
     def on_activated_async(self, view):
         if lang(view) is None or view.is_scratch():
@@ -352,7 +356,63 @@ class YcmdCompletionEventListener(sublime_plugin.EventListener):
             del self.view_line[view_id]
         view.erase_status('clang-code-errors')
 
+    def highlight_problems_with_phantoms(self, view, problems):
+        stylesheet = '''
+            <style>
+                div.error-arrow {
+                    border-top: 0.4rem solid transparent;
+                    border-left: 0.5rem solid color(var(--redish) blend(var(--background) 30%));
+                    width: 0;
+                    height: 0;
+                }
+                div.error {
+                    padding: 0.4rem 0 0.4rem 0.7rem;
+                    margin: 0 0 0.2rem;
+                    border-radius: 0 0.2rem 0.2rem 0.2rem;
+                }
+                div.error span.message {
+                    padding-right: 0.7rem;
+                }
+                div.error a {
+                    text-decoration: inherit;
+                    padding: 0.35rem 0.7rem 0.45rem 0.8rem;
+                    position: relative;
+                    bottom: 0.05rem;
+                    border-radius: 0 0.2rem 0.2rem 0;
+                    font-weight: bold;
+                }
+                html.dark div.error a {
+                    background-color: #00000018;
+                }
+                html.light div.error a {
+                    background-color: #ffffff18;
+                }
+            </style>
+        '''
+
+        phantoms = []
+        for problem in problems:
+            lineno = problem['location']['line_num']
+            colno = problem['location']['column_num']
+            region = view.word(view.text_point(lineno - 1, colno - 1))
+            print(region)
+            message = ERROR_MESSAGE_TEMPLATE.format(**problem)
+            phantoms.append(sublime.Phantom(
+                        region,
+                        ('<body id=inline-error>' + stylesheet +
+                            '<div class="error-arrow"></div><div class="error">' +
+                            '<span class="message">' + html.escape(message, quote=False) + '</span>' +
+                            '<a href=hide>' + chr(0x00D7) + '</a></div>' +
+                            '</body>'),
+                        sublime.LAYOUT_BELOW))
+        print(len(phantoms))
+        vid = view.id()
+        if vid not in self.phantoms_cache:
+            self.phantoms_cache[vid] = sublime.PhantomSet(view, 'ycmd')
+        self.phantoms_cache[vid].update(phantoms)
+
     def highlight_problems(self, view, problems):
+        self.highlight_problems_with_phantoms(view, problems)
         view.erase_regions('clang-code-errors')
         view_id = view.id()
         view_cache = {}
